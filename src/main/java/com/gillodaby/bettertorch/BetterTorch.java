@@ -2,12 +2,15 @@ package com.gillodaby.bettertorch;
 
 import com.hypixel.hytale.assetstore.AssetUpdateQuery;
 import com.hypixel.hytale.assetstore.map.BlockTypeAssetMap;
+import com.hypixel.hytale.assetstore.map.DefaultAssetMap;
 import com.hypixel.hytale.event.EventBus;
 import com.hypixel.hytale.protocol.ColorLight;
 import com.hypixel.hytale.protocol.Packet;
 import com.hypixel.hytale.server.core.HytaleServer;
 import com.hypixel.hytale.server.core.asset.type.blocktype.BlockTypePacketGenerator;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
+import com.hypixel.hytale.server.core.asset.type.item.config.Item;
+import com.hypixel.hytale.server.core.modules.item.ItemPacketGenerator;
 import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.events.AllWorldsLoadedEvent;
@@ -24,9 +27,11 @@ public final class BetterTorch {
     private static final String TORCH_KEYWORD = "torch";
     private static final Object LOCK = new Object();
     private static final Map<String, ColorLight> baseTorchLights = new HashMap<>();
+    private static final Map<String, ColorLight> baseTorchItemLights = new HashMap<>();
     private static int multiplier = 5;
     private static int lastAppliedMultiplier = -1;
     private static Field lightField;
+    private static Field itemLightField;
 
     private BetterTorch() {
     }
@@ -71,78 +76,143 @@ public final class BetterTorch {
     }
 
     private static void applyTorchLightMultiplier() {
-        BlockTypeAssetMap<String, BlockType> map = BlockType.getAssetMap();
-        if (map == null) {
-            System.out.println("[BetterTorch] BlockType asset map not available yet.");
+        BlockTypeAssetMap<String, BlockType> blockMap = BlockType.getAssetMap();
+        DefaultAssetMap<String, Item> itemMap = Item.getAssetMap();
+
+        if (blockMap == null && itemMap == null) {
+            System.out.println("[BetterTorch] BlockType/Item asset maps not available yet.");
             return;
         }
 
-        Field field = getLightField();
-        if (field == null) {
-            System.out.println("[BetterTorch] Failed to access BlockType.light field.");
-            return;
-        }
+        Field blockLightField = getLightField();
+        Field itemLightField = getItemLightField();
 
-        Map<String, BlockType> changed = new HashMap<>();
-        int scanned = 0;
+        Map<String, BlockType> changedBlocks = new HashMap<>();
+        Map<String, Item> changedItems = new HashMap<>();
+        int scannedBlocks = 0;
+        int scannedItems = 0;
         int targetMultiplier;
-        Map<String, ColorLight> torchLights;
+        Map<String, ColorLight> torchBlockLights;
+        Map<String, ColorLight> torchItemLights;
 
         synchronized (LOCK) {
             targetMultiplier = multiplier;
-            if (targetMultiplier == lastAppliedMultiplier && !baseTorchLights.isEmpty()) return;
+            boolean hasCachedTorchAssets = !baseTorchLights.isEmpty() || !baseTorchItemLights.isEmpty();
+            if (targetMultiplier == lastAppliedMultiplier && hasCachedTorchAssets) return;
 
-            if (baseTorchLights.isEmpty()) {
-                for (Map.Entry<String, BlockType> entry : map.getAssetMap().entrySet()) {
+            if (blockMap != null && baseTorchLights.isEmpty()) {
+                for (Map.Entry<String, BlockType> entry : blockMap.getAssetMap().entrySet()) {
                     String key = entry.getKey();
                     BlockType block = entry.getValue();
                     if (key == null || block == null) continue;
-                    if (!key.toLowerCase(Locale.ROOT).contains(TORCH_KEYWORD)) continue;
+                    String keyLower = key.toLowerCase(Locale.ROOT);
+                    System.out.println("[BetterTorch][DEBUG] Bloc trouvé : " + key);
+                    // Booster tout bloc dont le nom contient 'torch' (insensible à la casse, avec ou sans underscore)
+                    if (!keyLower.contains("torch")) continue;
+                    System.out.println("[BetterTorch][DEBUG] Bloc torch détecté : " + key);
                     ColorLight light = block.getLight();
                     if (light == null) continue;
                     baseTorchLights.put(key, new ColorLight(light));
                 }
             }
 
-            torchLights = new HashMap<>(baseTorchLights);
-        }
-
-        for (Map.Entry<String, ColorLight> entry : torchLights.entrySet()) {
-            String key = entry.getKey();
-            BlockType block = map.getAsset(key);
-            if (block == null) continue;
-            scanned++;
-
-            ColorLight original = entry.getValue();
-            ColorLight boosted = boostLight(original, targetMultiplier);
-            if (!boosted.equals(block.getLight())) {
-                try {
-                    field.set(block, boosted);
-                    changed.put(key, block);
-                } catch (IllegalAccessException e) {
-                    System.out.println("[BetterTorch] Failed to update light for " + key + ": " + e.getMessage());
+            if (itemMap != null && baseTorchItemLights.isEmpty()) {
+                for (Map.Entry<String, Item> entry : itemMap.getAssetMap().entrySet()) {
+                    String key = entry.getKey();
+                    Item item = entry.getValue();
+                    if (key == null || item == null) continue;
+                    if (!key.toLowerCase(Locale.ROOT).contains(TORCH_KEYWORD)) continue;
+                    ColorLight light = item.getLight();
+                    if (light == null) continue;
+                    baseTorchItemLights.put(key, new ColorLight(light));
                 }
             }
+
+            torchBlockLights = new HashMap<>(baseTorchLights);
+            torchItemLights = new HashMap<>(baseTorchItemLights);
+        }
+
+        if (blockMap != null && blockLightField != null) {
+            for (Map.Entry<String, ColorLight> entry : torchBlockLights.entrySet()) {
+                String key = entry.getKey();
+                BlockType block = blockMap.getAsset(key);
+                if (block == null) continue;
+                scannedBlocks++;
+
+                ColorLight original = entry.getValue();
+                ColorLight boosted = boostLight(original, targetMultiplier);
+                if (!boosted.equals(block.getLight())) {
+                    try {
+                        blockLightField.set(block, boosted);
+                        changedBlocks.put(key, block);
+                    } catch (IllegalAccessException e) {
+                        System.out.println("[BetterTorch] Failed to update light for block " + key + ": " + e.getMessage());
+                    }
+                }
+            }
+        } else if (blockMap == null) {
+            System.out.println("[BetterTorch] BlockType asset map not available yet.");
+        } else {
+            System.out.println("[BetterTorch] Failed to access BlockType.light field.");
+        }
+
+        if (itemMap != null && itemLightField != null) {
+            for (Map.Entry<String, ColorLight> entry : torchItemLights.entrySet()) {
+                String key = entry.getKey();
+                Item item = itemMap.getAsset(key);
+                if (item == null) continue;
+                scannedItems++;
+
+                ColorLight original = entry.getValue();
+                ColorLight boosted = boostLight(original, targetMultiplier);
+                if (!boosted.equals(item.getLight())) {
+                    try {
+                        itemLightField.set(item, boosted);
+                        changedItems.put(key, item);
+                    } catch (IllegalAccessException e) {
+                        System.out.println("[BetterTorch] Failed to update light for item " + key + ": " + e.getMessage());
+                    }
+                }
+            }
+        } else if (itemMap == null) {
+            System.out.println("[BetterTorch] Item asset map not available yet.");
+        } else {
+            System.out.println("[BetterTorch] Failed to access Item.light field.");
         }
 
         synchronized (LOCK) {
             lastAppliedMultiplier = targetMultiplier;
         }
 
-        if (!changed.isEmpty()) {
+        if (!changedBlocks.isEmpty() || !changedItems.isEmpty()) {
             int sampleLogged = 0;
-            for (Map.Entry<String, BlockType> e : changed.entrySet()) {
+            for (Map.Entry<String, BlockType> e : changedBlocks.entrySet()) {
                 if (sampleLogged >= 5) break;
-                ColorLight base = torchLights.get(e.getKey());
+                ColorLight base = torchBlockLights.get(e.getKey());
                 ColorLight newLight = e.getValue().getLight();
-                System.out.println("[BetterTorch] Sample change " + e.getKey() + ": " + describeLight(base) + " -> " + describeLight(newLight));
+                System.out.println("[BetterTorch] Sample block change " + e.getKey() + ": " + describeLight(base) + " -> " + describeLight(newLight));
                 sampleLogged++;
             }
-            sendBlockTypeUpdate(changed);
-            refreshLighting();
-            System.out.println("[BetterTorch] Torch light multiplier set to x" + targetMultiplier + " for " + changed.size() + " block types.");
+
+            sampleLogged = 0;
+            for (Map.Entry<String, Item> e : changedItems.entrySet()) {
+                if (sampleLogged >= 5) break;
+                ColorLight base = torchItemLights.get(e.getKey());
+                ColorLight newLight = e.getValue().getLight();
+                System.out.println("[BetterTorch] Sample item change " + e.getKey() + ": " + describeLight(base) + " -> " + describeLight(newLight));
+                sampleLogged++;
+            }
+
+            if (!changedBlocks.isEmpty()) {
+                sendBlockTypeUpdate(changedBlocks);
+                refreshLighting();
+            }
+            if (!changedItems.isEmpty()) {
+                sendItemUpdate(changedItems);
+            }
+            System.out.println("[BetterTorch] Torch light multiplier set to x" + targetMultiplier + " for " + changedBlocks.size() + " block types and " + changedItems.size() + " item(s).");
         } else {
-            System.out.println("[BetterTorch] No torch block types found to update (scanned=" + scanned + ").");
+            System.out.println("[BetterTorch] No torch block types or items found to update (scannedBlocks=" + scannedBlocks + ", scannedItems=" + scannedItems + ").");
         }
     }
 
@@ -161,6 +231,18 @@ public final class BetterTorch {
             Field field = BlockType.class.getDeclaredField("light");
             field.setAccessible(true);
             lightField = field;
+            return field;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static Field getItemLightField() {
+        if (itemLightField != null) return itemLightField;
+        try {
+            Field field = Item.class.getDeclaredField("light");
+            field.setAccessible(true);
+            itemLightField = field;
             return field;
         } catch (Throwable t) {
             return null;
@@ -242,6 +324,21 @@ public final class BetterTorch {
 
         if (refreshed > 0) {
             System.out.println("[BetterTorch] Lighting refresh requested for " + refreshed + " world(s).");
+        }
+    }
+
+    private static void sendItemUpdate(Map<String, Item> changed) {
+        try {
+            Universe universe = Universe.get();
+            if (universe == null) return;
+
+            ItemPacketGenerator generator = new ItemPacketGenerator();
+            Packet packet = generator.generateUpdatePacket(Item.getAssetMap(), changed, AssetUpdateQuery.DEFAULT);
+            if (packet != null) {
+                universe.broadcastPacket(packet);
+            }
+        } catch (Throwable t) {
+            System.out.println("[BetterTorch] Failed to broadcast item updates: " + t.getMessage());
         }
     }
 }
