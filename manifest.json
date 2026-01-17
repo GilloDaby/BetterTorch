@@ -1,0 +1,16 @@
+{
+  "Group": "GilloDaby",
+  "Name": "Better Torch Mod",
+  "Version": "1.1.1",
+  "Description": "Better Torch lighting boost (always max brightness)",
+  "Authors": [
+    { "Name": "GilloDaby" }
+  ],
+  "Website": "",
+  "ServerVersion": "*",
+  "Dependencies": {},
+  "OptionalDependencies": {},
+  "DisabledByDefault": false,
+  "Main": "com.gillodaby.bettertorch.BetterTorchPlugin",
+  "IncludesAssetPack": true
+}

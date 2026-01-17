@@ -1,0 +1,9 @@
+{
+  "id": "BetterTorch",
+  "name": "Better Torch Mod",
+  "version": "1.1.1",
+  "author": "GilloDaby",
+  "description": "Better Torch lighting boost (always max brightness)",
+  "main": "com.gillodaby.bettertorch.BetterTorchPlugin",
+  "dependencies": []
+}
